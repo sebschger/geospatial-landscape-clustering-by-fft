@@ -1,0 +1,23 @@
+# macOS/system files
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor/IDE files
+*.swp
+*~
+.idea/
+.vscode/
+
+# Temporäre Dateien
+*.tmp
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
