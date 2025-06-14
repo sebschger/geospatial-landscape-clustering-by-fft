@@ -21,3 +21,8 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+
+# specific to this project
+*.tif
+*.tiff
