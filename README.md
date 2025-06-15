@@ -45,6 +45,8 @@ Secondary:
 
 Once there are visual results, I’ll put them here.
 
+![Screenshot of Google Earth Pro using the older version of this nootebook](./readme_images/old-version-google-earth-pro.jpg)
+
 ## What cannot be achieved (, yet)
 
 While it is quite fascinating to see that the clusters found by the algorithm indeed appear similar in their topographical structure, there are, of course, aspects that are neglected in this approach entirely:
