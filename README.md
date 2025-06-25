@@ -43,7 +43,9 @@ Secondary:
 
 ## Results
 
-Once there are visual results, I’ll put them here.
+
+
+
 
 ![Screenshot of Google Earth Pro using the older version of this nootebook](./readme_images/old-version-google-earth-pro.jpg)
 
