@@ -1,0 +1,14 @@
+Cartopy==0.24.1
+dask==2024.8.2
+hdbscan==0.8.40
+matplotlib==3.10.3
+multiprocess==0.70.18
+numpy==2.3.1
+Pillow==11.2.1
+pyFFTW==0.15.0
+pyproj==3.7.1
+python-dotenv==1.1.1
+rasterio==1.4.3
+Requests==2.32.4
+scikit_learn==1.7.0
+scipy==1.16.0
