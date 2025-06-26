@@ -87,7 +87,7 @@ There is a python cell very much at the top of the notebook preceded by a markdo
 
 ![Plot illustrating a result using the current version of this nootebook](./readme_images/england-france.png)
 
-![Screenshot of Google Earth Pro using the older version of this nootebook](./readme_images/old-version-google-earth-pro.jpg)
+![Screenshot of Google Earth Pro using the current version of this nootebook](./readme_images/google-earth-pro.jpg)
 
 ## What’s new
 
