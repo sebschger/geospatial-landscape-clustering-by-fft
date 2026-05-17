@@ -22,6 +22,11 @@ ENV/
 env.bak/
 venv.bak/
 
+# Documentation
+documentation/
+
+# Results
+output/
 
 # specific to this project
 *.tif
