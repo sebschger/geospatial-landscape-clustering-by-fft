@@ -215,7 +215,7 @@ def _resample_original_dem(dem: AugmentedDEM):
                 # Extract the tiles
                 dem.tiles_resampled[i] = dem.projected_dem[0][y_start:y_end, x_start:x_end]
 
-                # Check if tile is in the valid region (threshold: >90% valid pixels)
+                # Check if tile is in the valid region (threshold: 100% valid pixels)
                 tile_validity_mask = dem.validity_mask[y_start:y_end, x_start:x_end]
                 valid_pixel_ratio = np.mean(tile_validity_mask)
                 dem.tile_validity.append(valid_pixel_ratio >= 1.0)
