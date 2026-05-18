@@ -7,6 +7,9 @@ from rasterio.warp import calculate_default_transform, transform_bounds, reproje
 from pyproj import Geod, CRS, Transformer
 from rasterio.enums import Resampling as ResampleEnum
 import dask.array as da
+from shapely.geometry import box
+from shapely.ops import transform as shapely_transform
+from rasterio.mask import geometry_mask
 
 # Project specific imports
 import common
@@ -80,40 +83,40 @@ def _resample_original_dem(dem: AugmentedDEM):
         intermediary_geo_bounds = dem.geo_bounds.in_another_crs(
             dem.geo_bounds.intermediary_aeqd_crs
         )
-        dst_crs = intermediary_geo_bounds.crs
+        dem.aeqd_crs = intermediary_geo_bounds.crs
 
-        target_res = (dem.settings["fft"]["tile_size_km"] * 1000) / dem.settings["fft"][
+        dem.aeqd_target_res_m = (dem.settings["fft"]["tile_size_km"] * 1000) / dem.settings["fft"][
             "tile_size_px"
         ]
         # Metres per pixel
 
         (
-            scaled_transform,
-            projected_dem_width_pixels,
-            projected_dem_height_pixels,
+            dem.aeqd_transform,
+            dem.aeqd_width_px,
+            dem.aeqd_height_px,
         ) = calculate_default_transform(
             src.crs,
-            dst_crs,
+            dem.aeqd_crs,
             src.width,
             src.height,
             *src.bounds,
-            resolution=target_res,
+            resolution=dem.aeqd_target_res_m,
             densify_pts=101,
         )
 
-        projected_dem = np.empty(
-            (src.count, projected_dem_height_pixels, projected_dem_width_pixels),
+        dem.projected_dem = np.empty(
+            (src.count, dem.aeqd_height_px, dem.aeqd_width_px),
             dtype=np.float32,
         )
 
         for i in range(1, src.count + 1):
             reproject(
                 source=rasterio.band(src, i),
-                destination=projected_dem[i - 1],
+                destination=dem.projected_dem[i - 1],
                 src_transform=src.transform,
                 src_crs=src.crs,
-                dst_transform=scaled_transform,
-                dst_crs=dst_crs,
+                dst_transform=dem.aeqd_transform,
+                dst_crs=dem.aeqd_crs,
                 resampling=ResampleEnum.bilinear,
             )
 
@@ -121,18 +124,18 @@ def _resample_original_dem(dem: AugmentedDEM):
         tile_multiplier = INTERNAL_SETTINGS["fft"]["tile_overlap_multi"]
 
         num_tiles_x = int(
-            (projected_dem_width_pixels // tile_size_px) * tile_multiplier
+            (dem.aeqd_width_px // tile_size_px) * tile_multiplier
         )
         num_tiles_y = int(
-            (projected_dem_height_pixels // tile_size_px) * tile_multiplier
+            (dem.aeqd_height_px // tile_size_px) * tile_multiplier
         )
 
         # Set the starting positions of each tile
-        start_left = (projected_dem_width_pixels % tile_size_px) // 2
-        end_right = projected_dem_width_pixels - start_left - tile_size_px
+        start_left = (dem.aeqd_width_px % tile_size_px) // 2
+        end_right = dem.aeqd_width_px - start_left - tile_size_px
 
-        start_top = (projected_dem_height_pixels % tile_size_px) // 2
-        end_bottom = projected_dem_height_pixels - start_top - tile_size_px
+        start_top = (dem.aeqd_height_px % tile_size_px) // 2
+        end_bottom = dem.aeqd_height_px - start_top - tile_size_px
 
         tile_starts_x = np.linspace(start_left, end_right, num_tiles_x, endpoint=False)
         tile_starts_y = np.linspace(start_top, end_bottom, num_tiles_y, endpoint=False)
@@ -158,16 +161,36 @@ def _resample_original_dem(dem: AugmentedDEM):
         dem.tiles_resampled = np.zeros((num_tiles_total, tile_size_px, tile_size_px))
 
         intermediary_transformer = Transformer.from_crs(
-            dst_crs, dem.geo_bounds.crs, always_xy=True
+            dem.aeqd_crs, dem.geo_bounds.crs, always_xy=True
         )
 
         # Flip the projected DEM map vertically
-        projected_dem[0] = np.flip(projected_dem[0], axis=0)
+        dem.projected_dem[0] = np.flip(dem.projected_dem[0], axis=0)
+
+        # Create a validity mask: True where pixels are in the valid area, False at the edges
+        # (where the reprojection "invented" data)
+        src_bbox = box(src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top)
+        
+        transformer = Transformer.from_crs(src.crs, dem.aeqd_crs, always_xy=True)
+        dem.bbox_aeqd = shapely_transform(transformer.transform, src_bbox)
+        
+        dem.validity_mask = geometry_mask(
+            [dem.bbox_aeqd],
+            out_shape=(dem.aeqd_height_px, dem.aeqd_width_px),
+            transform=dem.aeqd_transform,
+            invert=True  # True = valid, False = invalid
+        )
+
+        dem.validity_mask = np.flip(dem.validity_mask, axis=0)
+
 
         # Create a random generator for scattering the sample points a bit
         # This prevents the map from looking very "pixelated" and rather natural
         # It scatters the sample points, not the results, so the results are still accurate
         rng = np.random.default_rng()
+
+        # Store tile validity (whether a tile is mostly in the valid region)
+        dem.tile_validity = []
 
         with common.SimpleTimer("Calculating the center positions"):
             for i in range(num_tiles_total):
@@ -190,16 +213,24 @@ def _resample_original_dem(dem: AugmentedDEM):
                 y_center = (y_start + y_end) // 2
 
                 # Extract the tiles
-                dem.tiles_resampled[i] = projected_dem[0][y_start:y_end, x_start:x_end]
+                dem.tiles_resampled[i] = dem.projected_dem[0][y_start:y_end, x_start:x_end]
+
+                # Check if tile is in the valid region (threshold: >90% valid pixels)
+                tile_validity_mask = dem.validity_mask[y_start:y_end, x_start:x_end]
+                valid_pixel_ratio = np.mean(tile_validity_mask)
+                dem.tile_validity.append(valid_pixel_ratio >= 1.0)
 
                 # Save the metric centerpoints relative to the center
                 # to later infer the geographic position of the samples
                 projected_x_center = (
-                    x_center - (projected_dem_width_pixels / 2)
-                ) * target_res
+                    x_center - (dem.aeqd_width_px / 2)
+                ) * dem.aeqd_target_res_m
                 projected_y_center = (
-                    y_center - (projected_dem_height_pixels / 2)
-                ) * target_res
+                    y_center - (dem.aeqd_height_px / 2)
+                ) * dem.aeqd_target_res_m
+
+                dem.tile_centers_aeqd.append((projected_y_center, projected_x_center))
+
 
                 # Append the geographic coordinates (relative to the source coordinate system)
                 # to our list of the tile centers (which are the sample locations)

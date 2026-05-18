@@ -16,8 +16,8 @@ INTERNAL_SETTINGS["fft"]["fft_levels"] = 7  # 14
 
 INTERNAL_SETTINGS["output"] = {}
 INTERNAL_SETTINGS["output"]["folder_name"] = "output/label_images" 
-INTERNAL_SETTINGS["output"]["q_factor"] = 8 # 5 Bigger Q-Factor, smaller image result, faster computation
-INTERNAL_SETTINGS["output"]["label_mode_filter"] = 8  # 20 this is in arbitrary units. It will adapt to the final size, so bigger images are filtered in the same way
+INTERNAL_SETTINGS["output"]["q_factor"] = 5 # 5 Bigger Q-Factor, smaller image result, faster computation
+INTERNAL_SETTINGS["output"]["label_mode_filter"] = 4  # 20 this is in arbitrary units. It will adapt to the final size, so bigger images are filtered in the same way
 INTERNAL_SETTINGS["output"]["label_count"] = 10 # 10 as for now
 
 # Speed settings to quickly test things. Just set to True
