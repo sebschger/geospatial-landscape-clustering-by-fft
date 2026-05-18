@@ -208,24 +208,26 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write('\n'.join(lines))
 
+
 def mode_filter(label_map, radius=10) -> np.ndarray:
     """
     Returns the most prevalent label in a given radius inside a label map.
     The label map has to be in shape (y,x), the label values can be arbitrary integers.
     """
-    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
-    mask = x**2 + y**2 <= radius**2
+
 
     def mode_filter_func(values):
-        counts = np.bincount(values.astype("uint8"))
-        return np.argmax(counts)
-
+        unique, counts = np.unique(values, return_counts=True)
+        return unique[np.argmax(counts)]
+    
     filtered = ndimage.generic_filter(
-        label_map, function=mode_filter_func, footprint=mask, mode="nearest"
+        label_map,
+        function=mode_filter_func,
+        footprint=mask,
+        mode="nearest"
     )
-
+    
     return filtered
-
 
 
 def constrain_labels(input) -> list:
