@@ -215,10 +215,13 @@ def mode_filter(label_map, radius=10) -> np.ndarray:
     The label map has to be in shape (y,x), the label values can be arbitrary integers.
     """
 
-
     def mode_filter_func(values):
         unique, counts = np.unique(values, return_counts=True)
         return unique[np.argmax(counts)]
+    
+    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
+    mask = x**2 + y**2 <= radius**2
+
     
     filtered = ndimage.generic_filter(
         label_map,
