@@ -31,3 +31,7 @@ output/
 # specific to this project
 *.tif
 *.tiff
+
+# Cache
+__pycache__/
+*.pyc
