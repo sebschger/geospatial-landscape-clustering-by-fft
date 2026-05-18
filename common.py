@@ -4,10 +4,10 @@ import time
 import numpy as np
 import math
 from sklearn.metrics.pairwise import pairwise_distances, haversine_distances
-from scipy import ndimage # for filtering
 import random
 import re
-
+from skimage.filters.rank import modal
+from skimage.morphology import disk
 
 
 class GeographicCoordinate:
@@ -210,27 +210,15 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
 
 
 def mode_filter(label_map, radius=10) -> np.ndarray:
-    """
-    Returns the most prevalent label in a given radius inside a label map.
-    The label map has to be in shape (y,x), the label values can be arbitrary integers.
-    """
+    """Mode-Filter cleans the labels to make them more smooth"""
+    # modal braucht uint8 oder uint16 – offset für -1
+    offset = 1
+    shifted = (label_map + offset).astype(np.uint16)
+    
+    result = modal(shifted, disk(radius))
+    
+    return result.astype(np.int16) - offset
 
-    def mode_filter_func(values):
-        unique, counts = np.unique(values, return_counts=True)
-        return unique[np.argmax(counts)]
-    
-    y, x = np.ogrid[-radius : radius + 1, -radius : radius + 1]
-    mask = x**2 + y**2 <= radius**2
-
-    
-    filtered = ndimage.generic_filter(
-        label_map,
-        function=mode_filter_func,
-        footprint=mask,
-        mode="nearest"
-    )
-    
-    return filtered
 
 
 def constrain_labels(input) -> list:
