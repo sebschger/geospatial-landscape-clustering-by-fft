@@ -20,6 +20,7 @@ def _create_fft_tiles(dem: AugmentedDEM):
     """
     This creates an 2D FFT magnitude map for each individual tile of the map.
     """
+
     fft_input_array = pyfftw.empty_aligned(
         (
             len(dem.tiles_resampled),
@@ -46,9 +47,11 @@ def _create_fft_tiles(dem: AugmentedDEM):
         flags=("FFTW_MEASURE",),
     )
 
-    fft_input_array[:] = (
-        dem.tiles_resampled
-    )  # Important. [:] ensures the reserved empty array is used, and no new one is created! It will not work without that special slicing.
+    fft_input_array[:] = dem.tiles_resampled - dem.tiles_resampled.mean(
+        axis=(1, 2), keepdims=True
+    )
+
+    # Important. [:] ensures the reserved empty array is used, and no new one is created! It will not work without that special slicing.
 
     fft_execution_plan.execute()
 
@@ -85,9 +88,9 @@ def _resample_original_dem(dem: AugmentedDEM):
         )
         dem.aeqd_crs = intermediary_geo_bounds.crs
 
-        dem.aeqd_target_res_m = (dem.settings["fft"]["tile_size_km"] * 1000) / dem.settings["fft"][
-            "tile_size_px"
-        ]
+        dem.aeqd_target_res_m = (
+            dem.settings["fft"]["tile_size_km"] * 1000
+        ) / dem.settings["fft"]["tile_size_px"]
         # Metres per pixel
 
         (
@@ -123,12 +126,8 @@ def _resample_original_dem(dem: AugmentedDEM):
         # Set the number of tiles, the projected DEM map will be split into
         tile_multiplier = INTERNAL_SETTINGS["fft"]["tile_overlap_multi"]
 
-        num_tiles_x = int(
-            (dem.aeqd_width_px // tile_size_px) * tile_multiplier
-        )
-        num_tiles_y = int(
-            (dem.aeqd_height_px // tile_size_px) * tile_multiplier
-        )
+        num_tiles_x = int((dem.aeqd_width_px // tile_size_px) * tile_multiplier)
+        num_tiles_y = int((dem.aeqd_height_px // tile_size_px) * tile_multiplier)
 
         # Set the starting positions of each tile
         start_left = (dem.aeqd_width_px % tile_size_px) // 2
@@ -157,9 +156,6 @@ def _resample_original_dem(dem: AugmentedDEM):
         # Create a list for the sample positions to later grid-interpolate from them
         dem.tile_centers_orig = []
 
-        # Create the array for the resampled and reprojected tiles that later will be analyzed
-        dem.tiles_resampled = np.zeros((num_tiles_total, tile_size_px, tile_size_px))
-
         intermediary_transformer = Transformer.from_crs(
             dem.aeqd_crs, dem.geo_bounds.crs, always_xy=True
         )
@@ -169,20 +165,30 @@ def _resample_original_dem(dem: AugmentedDEM):
 
         # Create a validity mask: True where pixels are in the valid area, False at the edges
         # (where the reprojection "invented" data)
-        src_bbox = box(src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top)
-        
+        src_bbox = box(
+            src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top
+        )
+
         transformer = Transformer.from_crs(src.crs, dem.aeqd_crs, always_xy=True)
         dem.bbox_aeqd = shapely_transform(transformer.transform, src_bbox)
-        
+
+        # Bounding-Box schrumpfen, damit Modus-Ränder korrigiert werden
+        mode_filter_radius_m = (
+            INTERNAL_SETTINGS["output"]["label_mode_filter_radius_km"]
+            * dem.aeqd_target_res_m
+        )
+
+        dem.bbox_aeqd_safe = dem.bbox_aeqd.buffer(-mode_filter_radius_m)
+
+
         dem.validity_mask = geometry_mask(
-            [dem.bbox_aeqd],
+            [dem.bbox_aeqd_safe],
             out_shape=(dem.aeqd_height_px, dem.aeqd_width_px),
             transform=dem.aeqd_transform,
-            invert=True  # True = valid, False = invalid
+            invert=True,  # True = valid, False = invalid
         )
 
         dem.validity_mask = np.flip(dem.validity_mask, axis=0)
-
 
         # Create a random generator for scattering the sample points a bit
         # This prevents the map from looking very "pixelated" and rather natural
@@ -193,56 +199,47 @@ def _resample_original_dem(dem: AugmentedDEM):
         dem.tile_validity = []
 
         with common.SimpleTimer("Calculating the center positions"):
-            for i in range(num_tiles_total):
+            # Alle Tile-Zentren auf einmal berechnen
+            x_centers = tile_starts_grid_xy[:, 0] + tile_size_px // 2
+            y_centers = tile_starts_grid_xy[:, 1] + tile_size_px // 2
 
-                # Create randomness as mentioned above for x and y coordinates
-                random_shift = rng.uniform(-tile_size_px / 2, tile_size_px / 2, 2)
-
-                # Set up the horizontal bounds of the current tile
-                x_base = tile_starts_grid_xy[i, 0] + random_shift[0]
-                x_base = common.clamp(x_base, start_left, end_right)
-                x_start = x_base
-                x_end = x_base + tile_size_px
-                x_center = (x_start + x_end) // 2
-
-                # Set up the vertical bounds of the current tile
-                y_base = tile_starts_grid_xy[i, 1] + random_shift[1]
-                y_base = common.clamp(y_base, start_top, end_bottom)
-                y_start = y_base
-                y_end = y_base + tile_size_px
-                y_center = (y_start + y_end) // 2
-
-                # Extract the tiles
-                dem.tiles_resampled[i] = dem.projected_dem[0][y_start:y_end, x_start:x_end]
-
-                # Check if tile is in the valid region (threshold: 100% valid pixels)
-                tile_validity_mask = dem.validity_mask[y_start:y_end, x_start:x_end]
-                valid_pixel_ratio = np.mean(tile_validity_mask)
-                dem.tile_validity.append(valid_pixel_ratio >= 1.0)
-
-                # Save the metric centerpoints relative to the center
-                # to later infer the geographic position of the samples
-                projected_x_center = (
-                    x_center - (dem.aeqd_width_px / 2)
-                ) * dem.aeqd_target_res_m
-                projected_y_center = (
-                    y_center - (dem.aeqd_height_px / 2)
-                ) * dem.aeqd_target_res_m
-
-                dem.tile_centers_aeqd.append((projected_y_center, projected_x_center))
-
-
-                # Append the geographic coordinates (relative to the source coordinate system)
-                # to our list of the tile centers (which are the sample locations)
-                # Optimization idea: this could be parallelized
-                dem.tile_centers_orig.append(
-                    common.GeographicCoordinate(
-                        *intermediary_transformer.transform(
-                            projected_x_center, projected_y_center
-                        ),
-                        dem.geo_bounds.crs,
+            # Tiles und Validity vektorisiert
+            dem.tiles_resampled = np.stack(
+                [
+                    dem.projected_dem[0][y : y + tile_size_px, x : x + tile_size_px]
+                    for x, y in zip(
+                        tile_starts_grid_xy[:, 0], tile_starts_grid_xy[:, 1]
                     )
-                )
+                ]
+            )
+
+            dem.tile_validity = np.array(
+                [
+                    dem.validity_mask[y : y + tile_size_px, x : x + tile_size_px].all()
+                    for x, y in zip(
+                        tile_starts_grid_xy[:, 0], tile_starts_grid_xy[:, 1]
+                    )
+                ]
+            )
+
+            # Metrische Zentren auf einmal
+            projected_x_centers = (
+                x_centers - dem.aeqd_width_px / 2
+            ) * dem.aeqd_target_res_m
+            projected_y_centers = (
+                y_centers - dem.aeqd_height_px / 2
+            ) * dem.aeqd_target_res_m
+
+            # Ein einziger Batch-Transform-Aufruf statt num_tiles einzelner Aufrufe
+            xs_orig, ys_orig = intermediary_transformer.transform(
+                projected_x_centers, projected_y_centers
+            )
+
+            dem.tile_centers_aeqd = list(zip(projected_y_centers, projected_x_centers))
+            dem.tile_centers_orig = [
+                common.GeographicCoordinate(x, y, dem.geo_bounds.crs)
+                for x, y in zip(xs_orig, ys_orig)
+            ]
 
 
 def _bin_and_average_fft_tiles(dem: AugmentedDEM, circle_masks):
