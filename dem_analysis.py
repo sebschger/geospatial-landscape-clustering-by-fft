@@ -181,29 +181,30 @@ def _resample_original_dem(dem: AugmentedDEM):
         dem.bbox_aeqd_safe = dem.bbox_aeqd.buffer(-mode_filter_radius_m)
 
 
-        dem.validity_mask = geometry_mask(
+
+        dem.validity_mask_output = geometry_mask(
             [dem.bbox_aeqd_safe],
-            out_shape=(dem.aeqd_height_px, dem.aeqd_width_px),
-            transform=dem.aeqd_transform,
+            out_shape=(dem.dem_height_px, dem.dem_width_px),
+            transform=dem.geo_bounds.transform,
             invert=True,  # True = valid, False = invalid
         )
 
-        dem.validity_mask = np.flip(dem.validity_mask, axis=0)
+        dem.validity_mask_output = np.flip(dem.validity_mask, axis=0)
+
+
 
         # Create a random generator for scattering the sample points a bit
         # This prevents the map from looking very "pixelated" and rather natural
         # It scatters the sample points, not the results, so the results are still accurate
         rng = np.random.default_rng()
 
-        # Store tile validity (whether a tile is mostly in the valid region)
-        dem.tile_validity = []
 
         with common.SimpleTimer("Calculating the center positions"):
             # Alle Tile-Zentren auf einmal berechnen
             x_centers = tile_starts_grid_xy[:, 0] + tile_size_px // 2
             y_centers = tile_starts_grid_xy[:, 1] + tile_size_px // 2
 
-            # Tiles und Validity vektorisiert
+            # Tiles 
             dem.tiles_resampled = np.stack(
                 [
                     dem.projected_dem[0][y : y + tile_size_px, x : x + tile_size_px]
@@ -213,14 +214,6 @@ def _resample_original_dem(dem: AugmentedDEM):
                 ]
             )
 
-            dem.tile_validity = np.array(
-                [
-                    dem.validity_mask[y : y + tile_size_px, x : x + tile_size_px].all()
-                    for x, y in zip(
-                        tile_starts_grid_xy[:, 0], tile_starts_grid_xy[:, 1]
-                    )
-                ]
-            )
 
             # Metrische Zentren auf einmal
             projected_x_centers = (

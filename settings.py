@@ -11,7 +11,7 @@ INTERNAL_SETTINGS["fft"]["tile_size_px"] = 23 # 21
 
 INTERNAL_SETTINGS["fft"]["sealevel_threshold"] = 0.75 # 20
 
-INTERNAL_SETTINGS["fft"]["tile_overlap_percent"] = 0 # 85 How much (by a tile length in percent) do the tiles overlap
+INTERNAL_SETTINGS["fft"]["tile_overlap_percent"] = 85 # 85 How much (by a tile length in percent) do the tiles overlap
 INTERNAL_SETTINGS["fft"]["fft_levels"] = 17  # 15
 
 INTERNAL_SETTINGS["output"] = {}
