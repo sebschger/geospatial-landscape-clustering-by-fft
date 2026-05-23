@@ -11,7 +11,7 @@ from shapely.ops import transform as shapely_transform
 from shapely.geometry import Polygon
 from rasterio.mask import geometry_mask
 
-# Project specific imports
+# Projektspezifische Importe
 import common
 from settings import INTERNAL_SETTINGS
 
@@ -39,7 +39,7 @@ def densified_box(left, bottom, right, top, points_per_side=20):
 
 def _create_fft_tiles(dem: AugmentedDEM):
     """
-    This creates an 2D FFT magnitude map for each individual tile of the map.
+    Erstellt eine 2D-FFT-Magnitudenkarte für jede einzelne Kachel der Karte.
     """
 
     fft_input_array = pyfftw.empty_aligned(
@@ -72,7 +72,7 @@ def _create_fft_tiles(dem: AugmentedDEM):
         axis=(1, 2), keepdims=True
     )
 
-    # Important. [:] ensures the reserved empty array is used, and no new one is created! It will not work without that special slicing.
+    # Wichtig: [:] stellt sicher, dass das reservierte Array verwendet und kein neues erstellt wird! Ohne dieses spezielle Slicing funktioniert es nicht.
 
     fft_execution_plan.execute()
 
@@ -81,14 +81,14 @@ def _create_fft_tiles(dem: AugmentedDEM):
         fft_magnitude_spectra_unshifted, axes=(1, 2)
     )  # Centered FFT
 
-    # Very very rough get a mask excluding the sea
+    # Sehr grobe Maske, die Meeresflächen ausschließt
     dem.sealevel_mask = (
         dem.tiles_resampled.max(axis=(1, 2)) > dem.settings["fft"]["sealevel_threshold"]
     )
 
     dem.tiles_variance = np.var(dem.tiles_resampled, axis=(1, 2))
 
-    # Free memory. The resampled tiles are no longer needed
+    # Speicher freigeben. Die neu abgetasteten Kacheln werden nicht mehr benötigt
     del dem.tiles_resampled
 
 
@@ -96,9 +96,9 @@ def _create_fft_tiles(dem: AugmentedDEM):
 
 
 def _resample_original_dem(dem: AugmentedDEM):
-    """Takes the original dem and reprojects it to azimuthal equidistant.
-    This might lead to inaccuracies at the bounds. However those inaccuracies
-    are negligible, that the areas labeled will fall into the right categories."""
+    """Reprojiziiert das originale DEM auf azimutale Äquidistanz.
+    Dies kann zu Ungenauigkeiten an den Rändern führen. Diese Ungenauigkeiten sind
+    jedoch vernachlässigbar, sodass die bezeichneten Flächen in die richtigen Kategorien fallen."""
 
     with rasterio.open(dem.dem_path) as src:
 
@@ -112,7 +112,7 @@ def _resample_original_dem(dem: AugmentedDEM):
         dem.aeqd_target_res_m = (
             dem.settings["fft"]["tile_size_km"] * 1000
         ) / dem.settings["fft"]["tile_size_px"]
-        # Metres per pixel
+        # Meter pro Pixel
 
         (
             dem.aeqd_transform,
@@ -144,13 +144,13 @@ def _resample_original_dem(dem: AugmentedDEM):
                 resampling=ResampleEnum.bilinear,
             )
 
-        # Set the number of tiles, the projected DEM map will be split into
+        # Anzahl der Kacheln festlegen, in die die projizierte DEM-Karte aufgeteilt wird
         tile_multiplier = INTERNAL_SETTINGS["fft"]["tile_overlap_multi"]
 
         num_tiles_x = int((dem.aeqd_width_px // tile_size_px) * tile_multiplier)
         num_tiles_y = int((dem.aeqd_height_px // tile_size_px) * tile_multiplier)
 
-        # Set the starting positions of each tile
+        # Startpositionen jeder Kachel festlegen
         start_left = (dem.aeqd_width_px % tile_size_px) // 2
         end_right = dem.aeqd_width_px - start_left - tile_size_px
 
@@ -171,21 +171,21 @@ def _resample_original_dem(dem: AugmentedDEM):
             [tile_starts_grid_x.reshape(-1), tile_starts_grid_y.reshape(-1)], axis=1
         )
 
-        # Calculate the total number of tiles
+        # Gesamtanzahl der Kacheln berechnen
         num_tiles_total = num_tiles_x * num_tiles_y
 
-        # Create a list for the sample positions to later grid-interpolate from them
+        # Liste der Stichprobenpositionen erstellen, um später daraus zu interpolieren
         dem.tile_centers_orig = []
 
         intermediary_transformer = Transformer.from_crs(
             dem.aeqd_crs, dem.geo_bounds.crs, always_xy=True
         )
 
-        # Flip the projected DEM map vertically
+        # Projizierte DEM-Karte vertikal spiegeln
         dem.projected_dem[0] = np.flip(dem.projected_dem[0], axis=0)
 
-        # Create a validity mask: True where pixels are in the valid area, False at the edges
-        # (where the reprojection "invented" data)
+        # Gültigkeitsmaske erstellen: True für Pixel im gültigen Bereich, False an den Rändern
+        # (wo die Reprojektion Daten „erfunden" hat)
 
         src_bbox = densified_box(
             src.bounds.left,
