@@ -1,4 +1,4 @@
-# Project related
+# Projektbezogen
 from pyproj import Geod, CRS, Transformer
 import time
 import numpy as np
@@ -37,7 +37,7 @@ class GeographicCoordinate:
 
 
 class SimpleTimer:
-    '''This class is just a timer for checking the performance'''
+    '''Diese Klasse ist ein einfacher Timer zur Leistungsmessung.'''
 
 
 
@@ -57,7 +57,7 @@ class SimpleTimer:
 
 class VerboseInfoTimer:
     '''
-    This class wraps processes to help identifying what is done by printing info about them.
+    Diese Klasse kapselt Prozesse und gibt Informationen aus, um nachzuvollziehen, was gerade ausgeführt wird.
     '''
 
     def __init__(self, process_description: str, current_index: int = 1, total_count: int = 1, single_description: str | None = None):
@@ -93,10 +93,10 @@ class VerboseInfoTimer:
         print("")
 
 
-# Helper functions
+# Hilfsfunktionen
 
 def closest_to_median_indices(haystack):
-    """This finds the points’ ids closest to the median of a set"""
+    """Findet die IDs der Punkte, die dem Median einer Menge am nächsten liegen."""
     medianpoint = np.median(haystack, axis=0)
     distsances_squared = np.sum((haystack - medianpoint) ** 2, axis=1)
 
@@ -111,7 +111,7 @@ def sort_by_furthest(haystack):
     return np.argsort(closest_distances)[::-1]
 
 
-# Find the medoid IDs of an array and return them in ascending order
+# Findet die Medoid-IDs eines Arrays und gibt sie in aufsteigender Reihenfolge zurück
 def medoid_indices(haystack):
     distances = pairwise_distances(haystack)
     distances_to_all_others = distances.sum(axis=1)
@@ -120,15 +120,15 @@ def medoid_indices(haystack):
     return medoid_ranking
 
 
-# A simple limit function for integers
+# Eine einfache Begrenzungsfunktion für ganze Zahlen
 def clamp(x, min, max) -> int:
     return int(sorted([min, x, max])[1])
 
 
 def positions_to_kml(positions_per_label, output_path, lon_first=True):
     """
-    positions_per_label: dict label -> list of np.array([x, y]) in WGS84
-    lon_first: True falls position = [lon, lat], False falls [lat, lon]
+    positions_per_label: dict label -> Liste von np.array([x, y]) in WGS84
+    lon_first: True falls Position = [lon, lat], False falls [lat, lon]
     """
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -210,7 +210,7 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
 
 
 def mode_filter(label_map, radius=10) -> np.ndarray:
-    """Mode-Filter cleans the labels to make them more smooth"""
+    """Modus-Filter glättet die Labels."""
     # modal braucht uint8 oder uint16 – offset für -1
     offset = 1
     shifted = (label_map + offset).astype(np.uint16)
@@ -223,7 +223,7 @@ def mode_filter(label_map, radius=10) -> np.ndarray:
 
 def constrain_labels(input) -> list:
     """
-    Takes a list of integer labels in any range and converts them to 1, 2, 3…
+    Nimmt eine Liste von ganzzahligen Labels in einem beliebigen Bereich und konvertiert sie zu 1, 2, 3…
     """
 
     unique_labels = np.sort(np.unique(input))
@@ -237,7 +237,7 @@ def constrain_labels(input) -> list:
 
 def color_to_numpy(stringlist) -> np.ndarray:
     """
-    This converts a list of string hex color codes to actual rgb values in a numpy array.
+    Konvertiert eine Liste von Hex-Farbcodes als Zeichenketten in RGB-Werte in einem NumPy-Array.
     """
 
     colorlist = np.empty((len(stringlist), 3))
@@ -257,7 +257,7 @@ def color_to_numpy(stringlist) -> np.ndarray:
 
 def euclidean_distance(y_a, y_b, x_a, x_b) -> float:
     """
-    Calculates the pythagorean distance between two points.
+    Berechnet den euklidischen Abstand zwischen zwei Punkten.
     """
 
     return math.sqrt((y_a - y_b) ** 2 + (x_a - x_b) ** 2)
@@ -265,12 +265,12 @@ def euclidean_distance(y_a, y_b, x_a, x_b) -> float:
 
 def threshold(input, threshold, bandwidth=1) -> float:
     """
-    Creates smooth edges in the circle masks.
-    Values below threshold become 0, values above 1.
-    Values at the threshold ± half bandwidth are faded.
+    Erzeugt weiche Kanten in den Kreismasken.
+    Werte unterhalb des Schwellwerts werden 0, Werte oberhalb 1.
+    Werte im Bereich Schwellwert ± halbe Bandbreite werden weich übergeblendet.
     """
 
-    # This is essentially anti aliasing without subsampling.
+    # Im Wesentlichen Antialiasing ohne Unterabtastung.
 
     result = np.interp(
         input, [threshold - (bandwidth / 2), threshold + (bandwidth / 2)], [0, 1]
@@ -279,7 +279,7 @@ def threshold(input, threshold, bandwidth=1) -> float:
 
 
 def sort_labels(labels):
-    """Rearrange label ids by their group size"""
+    """Label-IDs nach Gruppengröße neu anordnen."""
     unique, counts = np.unique(labels, return_counts=True)
     size_order = np.argsort(-counts)
 
@@ -292,12 +292,12 @@ def sort_labels(labels):
 
 def CircleImage(height, width, radius, inverted=False, bandwidth=1) -> np.ndarray:
     """
-    Returns an antialiased image of a circle with a given radius as a numpy array for masking.
+    Gibt ein kantengeglättetes Bild eines Kreises mit gegebenem Radius als NumPy-Array zurück (für Masken).
     """
 
-    # Height, width defines the shape of the 'image'
-    # Inverted flips colors
-    # The bandwidth defines the width of a smooth edge of the circle (for anti aliasing)
+    # Höhe und Breite definieren die Form des 'Bildes'
+    # Inverted kehrt die Farben um
+    # Die Bandbreite definiert die Breite der weichen Kante des Kreises (für Antialiasing)
 
     circle_image = np.zeros((height, width), dtype=np.float32)
 
@@ -321,14 +321,14 @@ def CircleImage(height, width, radius, inverted=False, bandwidth=1) -> np.ndarra
 
 def RingImage(height, width, inner_radius, outer_radius, bandwidth) -> np.ndarray:
     """
-    Utilizes two circles to create a ring mask with smooth edges.
-    Please look into CircleImage for in-depth definition.
+    Verwendet zwei Kreise, um eine Ringmaske mit weichen Kanten zu erstellen.
+    Für eine ausführliche Beschreibung siehe CircleImage.
     """
 
     if outer_radius < inner_radius:
         raise ValueError("The inner radius must be smaller than the outer radius.")
 
-    # This combines two circles to form a ring mask
+    # Kombiniert zwei Kreise zu einer Ringmaske
     outercircle = CircleImage(
         height, width, outer_radius, inverted=True, bandwidth=bandwidth
     )
@@ -343,12 +343,12 @@ def RingImage(height, width, inner_radius, outer_radius, bandwidth) -> np.ndarra
 
 def RingImageSeries(height, width, steps, bandwidth) -> np.ndarray:
     """
-    This creates a 3D numpy array of the shape
-    (Masks, individual Height, individual Width)
-    This is used to sum and average the FFT magnitudes
+    Erstellt ein 3D-NumPy-Array der Form
+    (Masken, einzelne Höhe, einzelne Breite).
+    Wird verwendet, um FFT-Magnituden zu summieren und zu mitteln.
     """
 
-    # The diameter gets bigger logarithmically, starting with a diameter of 1
+    # Der Durchmesser wächst logarithmisch, beginnend mit einem Durchmesser von 1
     smallest_side = min(height, width)
 
     outer_radii = np.logspace(
