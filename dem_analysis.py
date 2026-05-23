@@ -7,13 +7,34 @@ from rasterio.warp import calculate_default_transform, transform_bounds, reproje
 from pyproj import Geod, CRS, Transformer
 from rasterio.enums import Resampling as ResampleEnum
 import dask.array as da
-from shapely.geometry import box
 from shapely.ops import transform as shapely_transform
+from shapely.geometry import Polygon
 from rasterio.mask import geometry_mask
 
 # Project specific imports
 import common
 from settings import INTERNAL_SETTINGS
+
+import cv2
+
+
+def densified_box(left, bottom, right, top, points_per_side=20):
+    """Erstellt ein Rechteck mit extra Punkten an den Seitenkanten."""
+
+    top_edge = list(
+        zip(np.linspace(left, right, points_per_side), [top] * points_per_side)
+    )
+    right_edge = list(
+        zip([right] * points_per_side, np.linspace(top, bottom, points_per_side))
+    )
+    bottom_edge = list(
+        zip(np.linspace(right, left, points_per_side), [bottom] * points_per_side)
+    )
+    left_edge = list(
+        zip([left] * points_per_side, np.linspace(bottom, top, points_per_side))
+    )
+
+    return Polygon(top_edge + right_edge + bottom_edge + left_edge)
 
 
 def _create_fft_tiles(dem: AugmentedDEM):
@@ -165,8 +186,13 @@ def _resample_original_dem(dem: AugmentedDEM):
 
         # Create a validity mask: True where pixels are in the valid area, False at the edges
         # (where the reprojection "invented" data)
-        src_bbox = box(
-            src.bounds.left, src.bounds.bottom, src.bounds.right, src.bounds.top
+
+        src_bbox = densified_box(
+            src.bounds.left,
+            src.bounds.bottom,
+            src.bounds.right,
+            src.bounds.top,
+            points_per_side=101,
         )
 
         transformer = Transformer.from_crs(src.crs, dem.aeqd_crs, always_xy=True)
@@ -174,37 +200,24 @@ def _resample_original_dem(dem: AugmentedDEM):
 
         # Bounding-Box schrumpfen, damit Modus-Ränder korrigiert werden
         mode_filter_radius_m = (
-            INTERNAL_SETTINGS["output"]["label_mode_filter_radius_km"]
-            * dem.aeqd_target_res_m
+            INTERNAL_SETTINGS["output"]["label_mode_filter_radius_km"] * 1000 * 2.65
         )
 
         dem.bbox_aeqd_safe = dem.bbox_aeqd.buffer(-mode_filter_radius_m)
 
-
-
         dem.validity_mask_output = geometry_mask(
             [dem.bbox_aeqd_safe],
-            out_shape=(dem.dem_height_px, dem.dem_width_px),
-            transform=dem.geo_bounds.transform,
+            out_shape=(dem.aeqd_height_px, dem.aeqd_width_px),
+            transform=dem.aeqd_transform,
             invert=True,  # True = valid, False = invalid
         )
 
-        dem.validity_mask_output = np.flip(dem.validity_mask, axis=0)
-
-
-
-        # Create a random generator for scattering the sample points a bit
-        # This prevents the map from looking very "pixelated" and rather natural
-        # It scatters the sample points, not the results, so the results are still accurate
-        rng = np.random.default_rng()
-
-
         with common.SimpleTimer("Calculating the center positions"):
-            # Alle Tile-Zentren auf einmal berechnen
+            # Tile-Zentren als Pixelposition (im geflippten Array)
             x_centers = tile_starts_grid_xy[:, 0] + tile_size_px // 2
             y_centers = tile_starts_grid_xy[:, 1] + tile_size_px // 2
 
-            # Tiles 
+            # Tiles aus dem geflippten Array schneiden
             dem.tiles_resampled = np.stack(
                 [
                     dem.projected_dem[0][y : y + tile_size_px, x : x + tile_size_px]
@@ -214,21 +227,23 @@ def _resample_original_dem(dem: AugmentedDEM):
                 ]
             )
 
+            # ECHTE AEQD-Koordinaten aus dem Transform (bezogen aufs Projektionszentrum)
+            # x: kein Flip. y: Flip rückgängig, da y_centers im geflippten Array liegen.
+            res = dem.aeqd_target_res_m
 
-            # Metrische Zentren auf einmal
-            projected_x_centers = (
-                x_centers - dem.aeqd_width_px / 2
-            ) * dem.aeqd_target_res_m
+            projected_x_centers = dem.aeqd_transform.c + (x_centers + 0.5) * res
             projected_y_centers = (
-                y_centers - dem.aeqd_height_px / 2
-            ) * dem.aeqd_target_res_m
+                dem.aeqd_transform.f - (dem.aeqd_height_px - 0.5 - y_centers) * res
+            )
+
+            # Diese echten Koordinaten gehen in BEIDE Listen
+            dem.tile_centers_aeqd = list(zip(projected_y_centers, projected_x_centers))
 
             # Ein einziger Batch-Transform-Aufruf statt num_tiles einzelner Aufrufe
             xs_orig, ys_orig = intermediary_transformer.transform(
                 projected_x_centers, projected_y_centers
             )
 
-            dem.tile_centers_aeqd = list(zip(projected_y_centers, projected_x_centers))
             dem.tile_centers_orig = [
                 common.GeographicCoordinate(x, y, dem.geo_bounds.crs)
                 for x, y in zip(xs_orig, ys_orig)
