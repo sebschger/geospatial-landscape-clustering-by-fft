@@ -364,3 +364,11 @@ def RingImageSeries(height, width, steps, bandwidth) -> np.ndarray:
         )
 
     return all_masks
+
+
+def replace_umlaute(input):
+    input = re.sub(r"ä","ae",input)
+    input = re.sub(r"ö","oe",input)
+    input = re.sub(r"ü","ue",input)
+    input = re.sub(r"ß","ss",input)
+    return input
