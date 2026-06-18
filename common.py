@@ -1,5 +1,6 @@
 # Projektbezogen
 from pyproj import Geod, CRS, Transformer
+from rasterio.warp import transform_bounds
 import time
 import numpy as np
 import math
@@ -8,6 +9,8 @@ import random
 import re
 from skimage.filters.rank import modal
 from skimage.morphology import disk
+
+geod = Geod(ellps="WGS84")
 
 
 class GeographicCoordinate:
@@ -35,15 +38,113 @@ class GeographicCoordinate:
         return np.array((self.x, self.y))
 
 
+class GeographicBounds:
+    """Speichert geografische oder projizierte Begrenzungsrahmen (West/Süd/Ost/Nord)
+    inklusive Koordinatensystem und optionalem Affin-Transform."""
+
+    def __init__(self, xmin, ymin, xmax, ymax, crs, transform=None):
+        self.xmin = xmin
+        self.ymin = ymin
+        self.xmax = xmax
+        self.ymax = ymax
+        self.crs = crs
+        self.transform = transform
+
+    def in_another_crs(self, dst_crs):
+        """Projiziert die Begrenzungsrahmen in ein anderes Koordinatensystem."""
+        # densify_pts verhindert, dass Wölbungen bei der Reprojektion abgeschnitten werden
+        projected_bounds = transform_bounds(self.crs, dst_crs, *self.bounds, densify_pts=10)
+        return GeographicBounds(*projected_bounds, dst_crs)
+
+    @property
+    def bounds(self):
+        """Gibt die Grenzen als Tupel (xmin, ymin, xmax, ymax) zurück."""
+        return (self.xmin, self.ymin, self.xmax, self.ymax)
+
+    @property
+    def center_x(self):
+        """Mittelpunkt entlang der X-Achse (Einheit je nach CRS)."""
+        return (self.xmin + self.xmax) / 2
+
+    @property
+    def center_y(self):
+        """Mittelpunkt entlang der Y-Achse (Einheit je nach CRS)."""
+        return (self.ymin + self.ymax) / 2
+
+    @property
+    def intermediary_aeqd_crs(self):
+        """Azimuthal-äquidistantes CRS zentriert auf den Mittelpunkt dieser Bounds.
+        Wird als Zwischenprojektion für die DEM-Kachelung verwendet."""
+        geo = self.in_another_crs(CRS("EPSG:4326"))
+        return CRS.from_proj4(
+            f"+proj=aeqd +lat_0={geo.center_y} +lon_0={geo.center_x} "
+            "x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs +type=crs"
+        )
+
+    def get_bound_length(self, side: str) -> float:
+        """Gibt die Länge einer Seite des Begrenzungsrahmens in Metern zurück.
+
+        Args:
+            side: 'left', 'top', 'right' oder 'bottom'
+        """
+        if self.crs.is_geographic:
+            coords = {
+                "left":   (self.xmin, self.ymin, self.xmin, self.ymax),
+                "top":    (self.xmin, self.ymax, self.xmax, self.ymax),
+                "right":  (self.xmax, self.ymin, self.xmax, self.ymax),
+                "bottom": (self.xmin, self.ymin, self.xmax, self.ymin),
+            }
+            if side not in coords:
+                raise ValueError(f"Ungültige Seite: '{side}'. Erlaubt: left, top, right, bottom.")
+            _, _, distance = geod.inv(*coords[side])
+        elif self.crs.is_projected:
+            if side in ("left", "right"):
+                distance = abs(self.ymax - self.ymin)
+            elif side in ("top", "bottom"):
+                distance = abs(self.xmax - self.xmin)
+            else:
+                raise ValueError(f"Ungültige Seite: '{side}'. Erlaubt: left, top, right, bottom.")
+        else:
+            raise ValueError("CRS ist weder geografisch noch projiziert.")
+        return distance
+
+    def get_projected_extent(self):
+        """Gibt Breite und Höhe in Metern als (x, y)-Tupel zurück.
+
+        Bei geografischen Bounds wird zunächst in die AEQD-Projektion umgerechnet.
+        """
+        if self.crs.is_geographic:
+            # Rekursiv: erst in AEQD projizieren, dann messen
+            return self.in_another_crs(self.intermediary_aeqd_crs).get_projected_extent()
+        elif self.crs.is_projected:
+            return (abs(self.xmax - self.xmin), abs(self.ymax - self.ymin))
+        else:
+            raise ValueError("CRS scheint ungültig. Weder geografisch noch projiziert.")
+
+    def as_list(self):
+        """Gibt die Grenzen als Liste [xmin, ymin, xmax, ymax] zurück."""
+        return [self.xmin, self.ymin, self.xmax, self.ymax]
+
+    def __str__(self):
+        lines = [
+            "GeographicBounds (gerundet):",
+            f"  X Min: {self.xmin:>10.2f}",
+            f"  Y Min: {self.ymin:>10.2f}",
+            f"  X Max: {self.xmax:>10.2f}",
+            f"  Y Max: {self.ymax:>10.2f}",
+            f"  Links: {self.get_bound_length('left'):.2f} m",
+            f"  Unten: {self.get_bound_length('bottom'):.2f} m",
+            f"  Zentrum: {self.center_y:.3f}°N, {self.center_x:.3f}°E",
+        ]
+        return "\n".join(lines)
+
 
 class SimpleTimer:
-    '''Diese Klasse ist ein einfacher Timer zur Leistungsmessung.'''
-
-
+    """Diese Klasse ist ein einfacher Timer zur Leistungsmessung."""
 
     def __init__(self, description):
         self.description = description
-    
+
     def __enter__(self):
         self.timer = time.perf_counter()
         print(f"Starting: {self.description}…")
@@ -54,13 +155,18 @@ class SimpleTimer:
         print(f"{self.description} took {self.time_needed:.1f} Seconds")
 
 
-
 class VerboseInfoTimer:
-    '''
+    """
     Diese Klasse kapselt Prozesse und gibt Informationen aus, um nachzuvollziehen, was gerade ausgeführt wird.
-    '''
+    """
 
-    def __init__(self, process_description: str, current_index: int = 1, total_count: int = 1, single_description: str | None = None):
+    def __init__(
+        self,
+        process_description: str,
+        current_index: int = 1,
+        total_count: int = 1,
+        single_description: str | None = None,
+    ):
         self.sd = single_description
         self.pd = process_description
         self.curr_it = current_index + 1
@@ -94,6 +200,7 @@ class VerboseInfoTimer:
 
 
 # Hilfsfunktionen
+
 
 def closest_to_median_indices(haystack):
     """Findet die IDs der Punkte, die dem Median einer Menge am nächsten liegen."""
@@ -133,7 +240,7 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2">',
-        '<Document>',
+        "<Document>",
     ]
 
     # Für jedes Label einen Style mit Zufallsfarbe
@@ -146,34 +253,38 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
         color = f"ff{b:02x}{g:02x}{r:02x}"
         label_colors[label] = color
 
-        lines.extend([
-            f'  <StyleMap id="m_label_{label}">',
-            f'    <Pair><key>normal</key><styleUrl>#s_label_{label}</styleUrl></Pair>',
-            f'    <Pair><key>highlight</key><styleUrl>#s_label_{label}_hl</styleUrl></Pair>',
-            '  </StyleMap>',
-            f'  <Style id="s_label_{label}">',
-            '    <IconStyle>',
-            '      <scale>5</scale>',
-            f'      <color>{color}</color>',
-            '      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/donut.png</href></Icon>',
-            '    </IconStyle>',
-            '    <LabelStyle><color>fffcffff</color></LabelStyle>',
-            '  </Style>',
-            f'  <Style id="s_label_{label}_hl">',
-            '    <IconStyle>',
-            '      <scale>5.90909</scale>',
-            f'      <color>{color}</color>',
-            '      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/donut.png</href></Icon>',
-            '    </IconStyle>',
-            '    <LabelStyle><color>fffcffff</color></LabelStyle>',
-            '  </Style>',
-        ])
+        lines.extend(
+            [
+                f'  <StyleMap id="m_label_{label}">',
+                f"    <Pair><key>normal</key><styleUrl>#s_label_{label}</styleUrl></Pair>",
+                f"    <Pair><key>highlight</key><styleUrl>#s_label_{label}_hl</styleUrl></Pair>",
+                "  </StyleMap>",
+                f'  <Style id="s_label_{label}">',
+                "    <IconStyle>",
+                "      <scale>5</scale>",
+                f"      <color>{color}</color>",
+                "      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/donut.png</href></Icon>",
+                "    </IconStyle>",
+                "    <LabelStyle><color>fffcffff</color></LabelStyle>",
+                "  </Style>",
+                f'  <Style id="s_label_{label}_hl">',
+                "    <IconStyle>",
+                "      <scale>5.90909</scale>",
+                f"      <color>{color}</color>",
+                "      <Icon><href>http://maps.google.com/mapfiles/kml/shapes/donut.png</href></Icon>",
+                "    </IconStyle>",
+                "    <LabelStyle><color>fffcffff</color></LabelStyle>",
+                "  </Style>",
+            ]
+        )
 
-    lines.extend([
-        '  <Folder>',
-        '    <name>Representative Tiles</name>',
-        '    <open>1</open>',
-    ])
+    lines.extend(
+        [
+            "  <Folder>",
+            "    <name>Representative Tiles</name>",
+            "    <open>1</open>",
+        ]
+    )
 
     for label, positions in positions_per_label.items():
         for idx, position in enumerate(positions):
@@ -182,31 +293,35 @@ def positions_to_kml(positions_per_label, output_path, lon_first=True):
             else:
                 lat, lon = float(position[0]), float(position[1])
 
-            lines.extend([
-                '    <Placemark>',
-                f'      <name>{label}_{idx}</name>',
-                f'      <styleUrl>#m_label_{label}</styleUrl>',
-                '      <LookAt>',
-                f'        <longitude>{lon}</longitude>',
-                f'        <latitude>{lat}</latitude>',
-                '        <range>5000</range>',
-                '        <tilt>62</tilt>',
-                '        <heading>0</heading>',
-                '      </LookAt>',
-                '      <Point>',
-                f'        <coordinates>{lon},{lat},0</coordinates>',
-                '      </Point>',
-                '    </Placemark>',
-            ])
+            lines.extend(
+                [
+                    "    <Placemark>",
+                    f"      <name>{label}_{idx}</name>",
+                    f"      <styleUrl>#m_label_{label}</styleUrl>",
+                    "      <LookAt>",
+                    f"        <longitude>{lon}</longitude>",
+                    f"        <latitude>{lat}</latitude>",
+                    "        <range>5000</range>",
+                    "        <tilt>62</tilt>",
+                    "        <heading>0</heading>",
+                    "      </LookAt>",
+                    "      <Point>",
+                    f"        <coordinates>{lon},{lat},0</coordinates>",
+                    "      </Point>",
+                    "    </Placemark>",
+                ]
+            )
 
-    lines.extend([
-        '  </Folder>',
-        '</Document>',
-        '</kml>',
-    ])
+    lines.extend(
+        [
+            "  </Folder>",
+            "</Document>",
+            "</kml>",
+        ]
+    )
 
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(lines))
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
 
 
 def mode_filter(label_map, radius=10) -> np.ndarray:
@@ -214,11 +329,10 @@ def mode_filter(label_map, radius=10) -> np.ndarray:
     # modal braucht uint8 oder uint16 – offset für -1
     offset = 1
     shifted = (label_map + offset).astype(np.uint16)
-    
-    result = modal(shifted, disk(radius))
-    
-    return result.astype(np.int16) - offset
 
+    result = modal(shifted, disk(radius))
+
+    return result.astype(np.int16) - offset
 
 
 def constrain_labels(input) -> list:
@@ -295,28 +409,19 @@ def CircleImage(height, width, radius, inverted=False, bandwidth=1) -> np.ndarra
     Gibt ein kantengeglättetes Bild eines Kreises mit gegebenem Radius als NumPy-Array zurück (für Masken).
     """
 
-    # Höhe und Breite definieren die Form des 'Bildes'
-    # Inverted kehrt die Farben um
-    # Die Bandbreite definiert die Breite der weichen Kante des Kreises (für Antialiasing)
-
-    circle_image = np.zeros((height, width), dtype=np.float32)
-
     if radius == 0:
-        return (1 - circle_image) if inverted else (circle_image)
-    else:
-        for x in range(width):
-            for y in range(height):
-                circle_image[y, x] = euclidean_distance(
-                    y + (0.5 if height % 2 == 1 else 0),
-                    height / 2,
-                    x + (0.5 if width % 2 == 1 else 0),
-                    width / 2,
-                )
+        circle_image = np.zeros((height, width), dtype=np.float32)
+        return (1 - circle_image) if inverted else circle_image
 
-    if inverted:
-        return 1 - threshold(circle_image, radius, 1)
-    else:
-        return threshold(circle_image, radius, 1)
+    # Koordinaten relativ zum Mittelpunkt, mit 0.5-Versatz bei ungerader Größe
+    ys = np.arange(height, dtype=np.float32) + (0.5 if height % 2 else 0.0) - height / 2
+    xs = np.arange(width, dtype=np.float32) + (0.5 if width % 2 else 0.0) - width / 2
+
+    yy, xx = np.meshgrid(ys, xs, indexing="ij")
+    circle_image = np.linalg.norm(np.stack([yy, xx], axis=-1), axis=-1)
+
+    result = threshold(circle_image, radius, bandwidth=bandwidth)
+    return 1 - result if inverted else result
 
 
 def RingImage(height, width, inner_radius, outer_radius, bandwidth) -> np.ndarray:
@@ -341,19 +446,20 @@ def RingImage(height, width, inner_radius, outer_radius, bandwidth) -> np.ndarra
     return (ringimg - ringimg.min()) / (ringimg.max() - ringimg.min())
 
 
-def RingImageSeries(height, width, steps, bandwidth) -> np.ndarray:
+def RingImageSeries(height, width, steps, bandwidth, ref_size=23) -> np.ndarray:
     """
     Erstellt ein 3D-NumPy-Array der Form
     (Masken, einzelne Höhe, einzelne Breite).
     Wird verwendet, um FFT-Magnituden zu summieren und zu mitteln.
     """
 
-    # Der Durchmesser wächst logarithmisch, beginnend mit einem Durchmesser von 1
     smallest_side = min(height, width)
 
-    outer_radii = np.logspace(
-        0, np.log2(smallest_side / 2), steps, base=2
-    )  # 0 means it starts with 1 (log)
+    # Verteilung immer relativ zu ref_size berechnen, dann skalieren
+    outer_radii = np.logspace(0, np.log2(ref_size / 2), steps, base=2) * (
+        smallest_side / ref_size
+    )
+
     inner_radii = np.append(0, outer_radii[:-1])
 
     all_masks = np.zeros((steps, height, width), dtype=np.float32)
@@ -366,9 +472,84 @@ def RingImageSeries(height, width, steps, bandwidth) -> np.ndarray:
     return all_masks
 
 
+def RingImageSeriesLog(height, width, steps, bandwidth) -> np.ndarray:
+    """
+    Erstellt ein 3D-NumPy-Array der Form
+    (Masken, einzelne Höhe, einzelne Breite).
+    Wird verwendet, um FFT-Magnituden zu summieren und zu mitteln.
+    Dies ist die zweite Version, die die Radien logaritmisch abstuft
+    """
+
+    max_radius = (height + width ) / 4
+
+    radii = np.logspace(0, np.log10(max_radius), steps + 1)
+
+    all_masks = np.zeros((steps, height, width), dtype=np.float32)
+
+    for i in range(steps):
+        all_masks[i] = RingImage(
+            height, width, radii[i], radii[i + 1], bandwidth=bandwidth
+        )
+
+    return all_masks
+
+
+
+def diameter_series(end, steps, finesteps=None):
+    # "steps" Schritte inkl. 1 und "end"
+
+    if finesteps is None: finesteps = steps
+
+    factor = 10 **( (np.log10(end)) / (steps-1))
+
+    series = np.logspace(0, np.log10(end), finesteps)
+
+    return (series, factor)
+
+
+def RingImageSeriesLogFine(
+    height, width, steps, animation_steps=100, bandwidth=1
+) -> np.ndarray:
+    """
+    Erstellt ein 3D-NumPy-Array der Form
+    (Masken, einzelne Höhe, einzelne Breite).
+    Wird verwendet, um FFT-Magnituden zu summieren und zu mitteln.
+    Dies ist die zweite Version, die die Radien logaritmisch abstuft
+    """
+
+    avg_radius = (width + height) / 4
+
+    half_diagonal = np.linalg.norm((height, width), 2) / 2  # Halbdiagonale
+
+    factor = 10 ** (np.log10(half_diagonal) / (steps - 1))
+
+    outer_max = avg_radius * np.sqrt(factor)
+    outer_min = factor**2
+
+    inner_max = avg_radius / np.sqrt(factor)
+    inner_min = factor
+
+    outer_radii = np.logspace(np.log10(outer_max), np.log10(outer_min), animation_steps)
+
+    inner_radii = np.logspace(np.log10(inner_max), np.log10(inner_min), animation_steps)
+
+    all_masks = np.zeros((animation_steps, height, width), dtype=np.float32)
+
+    for i in range(animation_steps):
+        all_masks[i] = RingImage(
+            height, width, inner_radii[i], outer_radii[i], bandwidth=bandwidth
+        )
+
+    return all_masks
+
+
+
+
+
+
 def replace_umlaute(input):
-    input = re.sub(r"ä","ae",input)
-    input = re.sub(r"ö","oe",input)
-    input = re.sub(r"ü","ue",input)
-    input = re.sub(r"ß","ss",input)
+    input = re.sub(r"ä", "ae", input)
+    input = re.sub(r"ö", "oe", input)
+    input = re.sub(r"ü", "ue", input)
+    input = re.sub(r"ß", "ss", input)
     return input
